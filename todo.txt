@@ -1,0 +1,4 @@
+- detect method call within same class 
+- detect method call outside class
+- detect types/class instances
+- remove redundant parentheses from array references and while. ex: arr[(expr)], while ((expr))
