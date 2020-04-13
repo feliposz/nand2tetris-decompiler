@@ -1,0 +1,14 @@
+call .\TestDecomp.bat Tests\Average
+call .\TestDecomp.bat Tests\ComplexArrays
+call .\TestDecomp.bat Tests\ConvertToBin
+call .\TestDecomp.bat Tests\FibonacciElement
+call .\TestDecomp.bat Tests\Fraction
+call .\TestDecomp.bat Tests\HelloWorld
+call .\TestDecomp.bat Tests\List
+call .\TestDecomp.bat Tests\OS
+call .\TestDecomp.bat Tests\Pong
+call .\TestDecomp.bat Tests\README.md
+call .\TestDecomp.bat Tests\Seven
+call .\TestDecomp.bat Tests\SimpleFunction
+call .\TestDecomp.bat Tests\Square
+call .\TestDecomp.bat Tests\StaticsTest
