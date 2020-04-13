@@ -50,7 +50,7 @@ class JackDecompiler {
                     this.temp[0] = undefined;
                 }
                 this.maybeDoStatement = false;
-        
+
                 switch (parsed.cmd) {
                     case 'push':
                         this.codePush(parsed.arg1, parsed.arg2);
@@ -111,19 +111,7 @@ class JackDecompiler {
 
         this.produceFunction();
 
-        const classHead = [];
-        classHead.push('class ' + this.basename + ' {');
-        classHead.push('');
-        if (this.statics.length > 0) {
-            classHead.push(this.formatDeclarations('    static ', this.statics));
-            classHead.push('');
-        }
-        if (this.fields.length > 0) {
-            classHead.push(this.formatDeclarations('    field ', this.fields));
-            classHead.push('');
-        }
-        Array.prototype.unshift.apply(this.body, classHead);
-        this.body.push('}');
+        this.produceClass();
     }
 
     pushCode(code) {
@@ -160,30 +148,27 @@ class JackDecompiler {
             this.dumpState('Invalid number on push ' + segment + ' on line ' + this.currentLine);
         }
         switch(segment) {
-            case 'local': 
-                this.pushElem('v' + i); 
+            case 'local':
+                this.updateType('v' + i, null);
+                this.pushElem('v' + i);
                 break;
-            case 'argument': 
-                if (!this.args[i]) {
-                    this.args[i] = {type: 'int', name: 'a' + i};
-                }
+            case 'argument':
+                this.updateType('a' + i, null);
                 this.pushElem('a' + i);
                 break;
-            case 'this': 
-                if (this.fields[i] == undefined) {
-                    this.fields[i] = {type: 'int', name: 'field' + i};
-                }
-                this.pushElem('field' + i); 
+            case 'this':
+                this.updateType('field' + i, null);
+                this.pushElem('field' + i);
                 break;
-            case 'that': 
+            case 'that':
                 this.pushElem(this.codeThat());
                 break;
-            case 'constant': 
-                this.pushElem(i); 
+            case 'constant':
+                this.pushElem(i);
                 break;
-            case 'static': 
-                this.statics[i] = {type: 'int', name: 'static' + i};
-                this.pushElem('static' + i); 
+            case 'static':
+                this.updateType('static' + i, null);
+                this.pushElem('static' + i);
                 break;
             case 'temp':
                 if (this.temp[i] != undefined) {
@@ -193,7 +178,7 @@ class JackDecompiler {
                     this.dumpState('Invalid use of temp ' + i);
                 }
                 break;
-            case 'pointer': 
+            case 'pointer':
                 this.pushElem([this.curThis, this.curThat][i]); // ???
                 break;
             default:
@@ -208,28 +193,19 @@ class JackDecompiler {
         let rhs;
         switch(segment) {
             case 'local':
-                rhs = this.getTerm(this.stack.pop(), false);
-                if (rhs == 'true' || rhs == 'false') { this.updateType('v' + i, 'boolean'); }
-                this.pushCode('let v' + i + ' = ' + rhs + ';');
+                this.codeLet('v' + i, true);
                 break;
             case 'argument':
-                rhs = this.getTerm(this.stack.pop(), false);
-                if (rhs == 'true' || rhs == 'false') { this.updateType('a' + i, 'boolean'); }
-                this.pushCode('let a' + i + ' = ' + rhs + ';');
+                this.codeLet('a' + i, true);
                 break;
             case 'this':
-                rhs = this.getTerm(this.stack.pop(), false);
-                if (rhs == 'true' || rhs == 'false') { this.updateType('field' + i, 'boolean'); }
-                this.pushCode('let field' + i + ' = ' + rhs + ';');
+                this.codeLet('field' + i, true);
                 break;
             case 'that':
-                rhs = this.getTerm(this.stack.pop(), false);
-                this.pushCode('let ' + this.codeThat() + ' = ' + rhs + ';');
+                this.codeLet(this.codeThat(), false);
                 break;
             case 'static':
-                rhs = this.getTerm(this.stack.pop(), false);
-                if (rhs == 'true' || rhs == 'false') { this.updateType('static' + i, 'boolean'); }
-                this.pushCode('let static' + i + ' = ' + rhs + ';');
+                this.codeLet('static' + i, true);
                 break;
             case 'temp':
                 const expr = this.stack.pop();
@@ -254,13 +230,13 @@ class JackDecompiler {
                 this.dumpState("not implemented codePointer curThis: " + this.curThis);
             } else {
                 const expr = this.stack.pop();
-                if (expr.startsWith('Memory.alloc')) {
+                if (expr.toString().startsWith('Memory.alloc')) {
                     this.fnKind = 'constructor';
                     this.curThis = 'this';
                 } else {
                     this.fnKind = 'method';
                     this.curThis = expr;
-                    this.args[0] = {type: this.basename, name: this.curThis};    
+                    this.args[0] = {name: this.curThis, type: this.basename};
                 }
             }
         } else {
@@ -279,31 +255,75 @@ class JackDecompiler {
         }
     }
 
+    codeLet(varName, updateType) {
+        const rhs = this.getTerm(this.stack.pop(), false);
+        if (updateType) {
+            if (rhs == 'true' || rhs == 'false') {
+                this.updateType(varName, 'boolean');
+            } else if (rhs == 'this') {
+                this.updateType(varName, this.basename);
+            } else {
+                // detect default constructor
+                const regexp = /^([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)\(.*\)$/;
+                if (regexp.test(rhs)) {
+                    const className = rhs.replace(regexp, '$1');
+                    const functionName = rhs.replace(regexp, '$2');
+                    if (functionName == 'new') {
+                        this.updateType(varName, className);
+                    }
+                }
+            }
+        }
+        this.pushCode('let ' + varName + ' = ' + rhs + ';');
+    }
+
     updateType(name, type) {
-        for (let i = 0; i < this.vars.length; i++) {
-            if (this.vars[i] && this.vars[i].name == name) {
-                this.vars[i].type = type;
-                return;
+        const regexp = /([a-z]+)([0-9]+)/;
+        const prefix = name.replace(regexp, '$1');
+        const i = parseInt(name.replace(regexp, '$2'), 10);
+        if (prefix == 'v') {
+            if (this.vars[i]) {
+                this.vars[i].type = type || this.vars[i].type;
+            } else {
+                this.vars[i] = {name, type};
+            }
+        } else if (prefix == 'a') {
+            if (this.args[i]) {
+                this.args[i].type = type || this.args[i].type;
+            } else {
+                this.args[i] = {name, type};
+            }
+        } else if (prefix == 'field') {
+            if (this.fields[i]) {
+                this.fields[i].type = type || this.fields[i].type;
+            } else {
+                this.fields[i] = {name, type};
+            }
+        } else if (prefix == 'static') {
+            if (this.statics[i]) {
+                this.statics[i].type = type || this.statics[i].type;
+            } else {
+                this.statics[i] = {name, type};
             }
         }
-        for (let i = 0; i < this.args.length; i++) {
-            if (this.args[i] && this.args[i].name == name) {
-                this.args[i].type = type;
-                return;
+    }
+
+    getType(name) {
+        const regexp = /([a-z]+)([0-9]+)/;
+        if (regexp.test(name)) {
+            const prefix = name.replace(regexp, '$1');
+            const i = parseInt(name.replace(regexp, '$2'), 10);
+            if (prefix == 'v') {
+                return this.vars[i].type;
+            } else if (prefix == 'a') {
+                return this.args[i].type;
+            } else if (prefix == 'field') {
+                return this.fields[i].type;
+            } else if (prefix == 'static') {
+                return this.statics[i].type;
             }
         }
-        for (let i = 0; i < this.fields.length; i++) {
-            if (this.fields[i] && this.fields[i].name == name) {
-                this.fields[i].type = type;
-                return;
-            }
-        }
-        for (let i = 0; i < this.statics.length; i++) {
-            if (this.statics[i] && this.statics[i].name == name) {
-                this.statics[i].type = type;
-                return;
-            }
-        }
+        return null;
     }
 
     codeAdd() {
@@ -369,7 +389,7 @@ class JackDecompiler {
 
     dumpState(msg) {
         console.dir({
-            code: this.code, 
+            code: this.code,
             stack: this.stack,
             temp: this.temp,
             curThis: this.curThis,
@@ -454,11 +474,11 @@ class JackDecompiler {
     }
 
     codeCall(fnName, numArgs) {
-        const args = [];
+        let args = [];
         for (let i = 0; i < numArgs; i++) {
             args.push(this.getTerm(this.stack.pop()));
         }
-        if (fnName == 'String.appendChar' && numArgs == 2) {
+        if (fnName == 'String.appendChar' && numArgs == 2) { // building string constant
             if (args[1].startsWith('String.new(')) {
                 this.pushElem('"' + String.fromCharCode(args[0]) + '"');
                 return;
@@ -467,7 +487,6 @@ class JackDecompiler {
                 return;
             }
         }
-        // TODO: detect method call
         if (this.basename != 'Math') { // Within Math class, must use function. Outside can use the operator.
             if (fnName == 'Math.multiply') {
                 const a = this.getTerm(args[0], true);
@@ -481,14 +500,32 @@ class JackDecompiler {
                 return;
             }
         }
-        this.pushElem(fnName + '(' + args.reverse().join(', ') + ')');
+        args = args.reverse();
+        if (args.length > 0) {
+            const [className, functionName] = fnName.split('.');
+            if (className == this.basename) {
+                if (args[0] == 'this') { // same class method call
+                    args.shift();
+                    fnName = functionName;
+                } else {
+                    // same class function call, do nothing
+                }
+            } else {
+                const type = this.getType(args[0]); // other object method call
+                if (type != null && type != 'int' && type != 'boolean' && type != 'char' && type != 'Array') {
+                    const obj = args.shift();
+                    fnName = obj + '.' + functionName;
+                }
+            }
+        }
+        this.pushElem(fnName + '(' + args.join(', ') + ')');
     }
 
     codeFunction(fnName, numLocals) {
         this.produceFunction();
         this.fnName = fnName.replace(this.basename + '.', '');
         for (let i = 0; i < numLocals; i++) {
-            this.vars.push({type: 'int', name: 'v' + i});
+            this.vars.push({name: 'v' + i, type: null});
         }
     }
 
@@ -497,7 +534,12 @@ class JackDecompiler {
         if (retValue == 'this') {
             this.fnType = this.basename;
         } else if (this.fnType == 'void' && retValue != 0) {
-            this.fnType = 'int'; // TODO: find out real type...
+            const type = this.getType(retValue);
+            if (type == null) {
+                this.fnType = 'int';
+            } else {
+                this.fnType = type;
+            }
         }
         this.pushCode('return ' + retValue + ';');
     }
@@ -509,7 +551,7 @@ class JackDecompiler {
                 if (i > 0) {
                     varDec += ';\n';
                 }
-                varDec += prefix + vars[i].type + ' ' + vars[i].name;
+                varDec += prefix + (vars[i].type || 'int') + ' ' + vars[i].name;
             } else {
                 varDec += ', ' + vars[i].name;
             }
@@ -524,9 +566,9 @@ class JackDecompiler {
             }
             let argDec = null;
             if (this.curThis && this.fnKind != 'constructor') {
-                argDec = this.args.slice(1).map(v => v.type + ' ' + v.name).join(', ');
+                argDec = this.args.slice(1).map(v => (v.type || 'int') + ' ' + v.name).join(', ');
             } else {
-                argDec = this.args.map(v => v.type + ' ' + v.name).join(', ');
+                argDec = this.args.map(v => (v.type || 'int') + ' ' + v.name).join(', ');
             }
             if (this.fnType == 'void') {
                 for (let i = 0; i < this.code.length; i++) {
@@ -558,6 +600,22 @@ class JackDecompiler {
         this.curThat = null;
         this.maybeDoStatement = false;
         this.indent = 0;
+    }
+
+    produceClass() {
+        const classHead = [];
+        classHead.push('class ' + this.basename + ' {');
+        classHead.push('');
+        if (this.statics.length > 0) {
+            classHead.push(this.formatDeclarations('    static ', this.statics));
+            classHead.push('');
+        }
+        if (this.fields.length > 0) {
+            classHead.push(this.formatDeclarations('    field ', this.fields));
+            classHead.push('');
+        }
+        Array.prototype.unshift.apply(this.body, classHead);
+        this.body.push('}');
     }
 
 };
